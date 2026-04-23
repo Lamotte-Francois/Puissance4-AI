@@ -1,4 +1,1 @@
-connect_four_ai
 numpy
-random
-json
