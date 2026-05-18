@@ -1,0 +1,77 @@
+import pygame
+import sys
+
+# Dimensions
+COLS = 7
+ROWS = 6
+CELL_SIZE = 100
+WIDTH = COLS * CELL_SIZE
+HEIGHT = ROWS * CELL_SIZE
+
+# Couleurs
+BLUE = (0, 0, 255)
+BLACK = (0, 0, 0)
+RED = (255, 0, 0)
+YELLOW = (255, 255, 0)
+
+def bitboard_to_grid(bb1, bb2):
+    grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+
+    for col in range(COLS):
+        for row in range(ROWS):
+            bit_index = col * 7 + row
+            mask = 1 << bit_index
+
+            # 🔥 inversion ici
+            display_row = ROWS - 1 - row
+
+            if bb1 & mask:
+                grid[display_row][col] = 1
+            elif bb2 & mask:
+                grid[display_row][col] = 2
+
+    return grid
+
+def draw_board(screen, grid):
+    for col in range(COLS):
+        for row in range(ROWS):
+            pygame.draw.rect(screen, BLUE,
+                             (col * CELL_SIZE, row * CELL_SIZE, CELL_SIZE, CELL_SIZE))
+            
+            center = (
+                col * CELL_SIZE + CELL_SIZE // 2,
+                row * CELL_SIZE + CELL_SIZE // 2
+            )
+
+            if grid[row][col] == 0:
+                pygame.draw.circle(screen, BLACK, center, CELL_SIZE // 2 - 10)
+            elif grid[row][col] == 1:
+                pygame.draw.circle(screen, RED, center, CELL_SIZE // 2 - 10)
+            elif grid[row][col] == 2:
+                pygame.draw.circle(screen, YELLOW, center, CELL_SIZE // 2 - 10)
+
+def main():
+    pygame.init()
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    pygame.display.set_caption("Puissance 4 - Bitboard")
+
+    # 🔽 Entrée utilisateur
+    print("Entre le bitboard du joueur 1 (entier) :")
+    bb1 = int(input())
+
+    print("Entre le bitboard du joueur 2 (entier) :")
+    bb2 = int(input())
+
+    grid = bitboard_to_grid(bb1, bb2)
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+        draw_board(screen, grid)
+        pygame.display.update()
+
+if __name__ == "__main__":
+    main()
