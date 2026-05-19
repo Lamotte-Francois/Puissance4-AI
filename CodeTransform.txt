@@ -1,0 +1,117 @@
+import torch
+import random 
+# import torchvision.transforms.functional as TF
+import torchvision.transforms.v2 as v2
+from grille import load_dataset, bitboard_to_grid, draw_board_cv2
+from torch.utils.data import Dataset
+import cv2
+import numpy as np
+
+
+
+class  CustomDataset ( Dataset ): 
+    def  __init__ ( self, path, transforms):
+
+        """ 
+        Ces étiquettes et données peuvent être le chemin d'accès au jeu de données ou directement. 
+        Dans cet exemple, je définis un petit jeu de données. 
+        Cependant, selon le contexte, le code peut être modifié pour lire les données et les étiquettes 
+        à partir de leur emplacement. 
+
+
+        Les transformations sont initialisées ici et seront appliquées aux données et aux étiquettes 
+        lors de leur récupération dans la méthode __getitem__(). Ici, la transformation peut être 
+        n'importe quelle fonction selon la tâche à accomplir. 
+        
+        Arguments : 
+            data (liste ou tableau) : Échantillons de données d'entrée. 
+            labels (liste ou tableau) : Étiquettes correspondantes aux échantillons de données. 
+            transform (fonction, optionnel) : Transformations pour le prétraitement des données. 
+            target_transform (fonction, optionnel) : Transformations pour le prétraitement des étiquettes. 
+        """
+
+        #self.data = data 
+
+        self.data = load_dataset(path)
+        
+
+        self.horizontalflip = v2.RandomHorizontalFlip(1)
+        self.transform = transforms 
+
+
+    def  __len__ ( self ): 
+        return  len(self.data) 
+    
+
+    def __getitem__(self, idx):
+        bb1, bb2, turn, probs = self.data[idx]
+        grid = bitboard_to_grid(bb1, bb2)
+        img = draw_board_cv2(grid, probs, turn)
+        img = torch.tensor(img, dtype=torch.float32)
+
+#
+        img = img.permute(2, 0, 1)
+#
+
+        label = torch.tensor(probs, dtype=torch.float32)
+
+        # -----------------
+
+
+        img = self.transform(img)
+
+
+        # ------------------
+        
+        img,label = self.random_horizontal_flip(img,label)
+
+        return img, label
+
+    
+    def random_horizontal_flip(self, grid, probs, p=0.5):
+
+        if random.random() < p:
+            grid = self.horizontalflip(grid)
+            #probs = self.horizontalflip(probs)
+            
+        return   grid,probs
+
+
+if __name__ == "__main__":
+
+    idx = 50
+    print("reading dataset")
+    transforms=v2.Compose([v2.RandomHorizontalFlip(1)
+        #v2.RandomRotation(10,v2.InterpolationMode.NEAREST,0) #0  quand il manque des pixels après rotation, mets du vide (fond noir)
+        #v2.ColorJitter(0.2, 0.2,1.2,0.5),
+        #v2.GaussianBlur(5,0.1),
+        #v2.GaussianNoise(0, 0.2, True),
+        #v2.RandomAdjustSharpness(0.8,0.5),
+        #v2.RandomZoomOut(0,(1.0, 4.0),p=0.8),#0=(fond noir)
+        #v2.RandomAffine(20, translate=(0.2, 0.2), fill=0)# Random shifts with white border
+    ])
+
+    my_dataset = CustomDataset("E:\\dataset.json",transforms)
+
+    # # ----------- AFFICHAGE IMAGE -----------
+    # grid, label = my_dataset[idx]
+    # img = grid.detach().cpu().numpy()
+    # print(img.shape)
+    # print(label.shape)
+
+    img, label = my_dataset[idx]
+
+    # tensor -> numpy
+    #img = img.detach().cpu().numpy()
+    img = img.detach().cpu().permute(1, 2, 0).numpy().astype(np.uint8)
+
+    
+    print("img shape:", img.shape)
+
+    # sécurisation
+    img = np.clip(img, 0, 255).astype(np.uint8)
+
+    # affichage uniquement de l'image
+    cv2.imshow("image", img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
