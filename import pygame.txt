@@ -1,0 +1,153 @@
+import pygame
+import sys
+import json
+
+# Dimensions
+COLS = 7
+ROWS = 6
+CELL_SIZE = 100
+WIDTH = COLS * CELL_SIZE
+HEIGHT = ROWS * CELL_SIZE #+ 60  # espace pour affichage probas
+
+# Couleurs
+BLUE = (0, 0, 255)
+BLACK = (0, 0, 0)
+RED = (255, 0, 0)
+YELLOW = (255, 255, 0)
+GREEN = (0, 255, 0)
+WHITE = (255, 255, 255)
+
+
+def bitboard_to_grid(bb1, bb2):
+    grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+
+    for col in range(COLS):
+        for row in range(ROWS):
+            bit_index = col * 7 + row
+            mask = 1 << bit_index
+            display_row = ROWS - 1 - row
+
+            if bb1 & mask:
+                grid[display_row][col] = 1
+            elif bb2 & mask:
+                grid[display_row][col] = 2
+
+    return grid
+
+
+def draw_board(screen, grid, probs, turn):
+    screen.fill(BLACK)
+
+    # Plateau
+    for col in range(COLS):
+        for row in range(ROWS):
+            pygame.draw.rect(
+                screen,
+                BLUE,
+                (col * CELL_SIZE, row * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+            )
+
+            center = (
+                col * CELL_SIZE + CELL_SIZE // 2,
+                row * CELL_SIZE + CELL_SIZE // 2
+            )
+
+            if grid[row][col] == 0:
+                color = BLACK
+            elif grid[row][col] == 1:
+                color = RED
+            else:
+                color = YELLOW
+
+            pygame.draw.circle(screen, color, center, CELL_SIZE // 2 - 10)
+
+    # # 🔥 Affichage des probabilités (barres vertes)
+    # for col in range(COLS):
+    #     p = probs[col]
+    #     bar_height = int(p * 50)  # max 50px
+
+    #     x = col * CELL_SIZE + CELL_SIZE // 4
+    #     y = HEIGHT - bar_height - 5
+
+    #     pygame.draw.rect(
+    #         screen,
+    #         GREEN,
+    #         (x, y, CELL_SIZE // 2, bar_height)
+    #     )
+
+    # # Texte
+    # font = pygame.font.SysFont(None, 30)
+
+    # # Affichage turn
+    # turn_text = font.render(f"Turn: {turn}", True, WHITE)
+    # screen.blit(turn_text, (10, HEIGHT - 55))
+
+    # # afficher probas en texte
+    # for col in range(COLS):
+    #     txt = font.render(f"{probs[col]:.2f}", True, WHITE)
+    #     screen.blit(txt, (col * CELL_SIZE + 10, HEIGHT - 30))
+
+
+def load_dataset(path):
+    try:
+        with open(path, "r") as f:
+            raw_data = json.load(f)
+
+        dataset = []
+
+        for key, value in raw_data.items():
+            key = key.strip("()")
+            bb1_str, bb2_str = key.split(",")
+
+            bb1 = int(bb1_str.strip())
+            bb2 = int(bb2_str.strip())
+
+            probs = value[0]
+            turn = value[1]
+
+            dataset.append((bb1, bb2, turn, probs))
+
+        return dataset
+
+    except Exception as e:
+        print(f"Erreur chargement dataset : {e}")
+        sys.exit()
+
+
+def main():
+    pygame.init()
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    pygame.display.set_caption("Puissance 4 - Dataset Viewer")
+
+    dataset = load_dataset("E:\\dataset.json")
+
+    index = 0
+    bb1, bb2, turn, probs = dataset[index]
+    grid = bitboard_to_grid(bb1, bb2)
+
+    clock = pygame.time.Clock()
+    last_update = pygame.time.get_ticks()
+    delay = 000 #Timer
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+        now = pygame.time.get_ticks()
+        if now - last_update >= delay:
+            index = (index + 1) % len(dataset)
+            bb1, bb2, turn, probs = dataset[index]
+            grid = bitboard_to_grid(bb1, bb2)
+
+            last_update = now
+
+        draw_board(screen, grid, probs, turn)
+        pygame.display.update()
+
+        clock.tick(60)
+
+
+if __name__ == "__main__":
+    main()
