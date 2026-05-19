@@ -1,291 +1,472 @@
 import torch
+import random
+import torchvision.transforms.v2 as v2
+from grille import load_dataset, bitboard_to_grid, draw_board_cv2
+
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset, random_split
-import numpy as np
+
+from torch.utils.data import (
+    Dataset,
+    DataLoader,
+    random_split
+)
+
 import cv2
+import numpy as np
 
 # =========================================================
-
-# DEVICE : CPU ou GPU
-
+# DEVICE
 # =========================================================
-
-# GPU = beaucoup plus rapide (si disponible)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Device utilisé :", device)
 
 # =========================================================
+# TRANSFORM CUSTOM
+# =========================================================
 
+class ReplaceBlackWithBackground:
+
+    def __init__(self, background_path):
+
+        bg = cv2.imread(background_path)
+        bg = cv2.cvtColor(bg, cv2.COLOR_BGR2RGB)
+
+        self.background = bg.astype(np.float32) / 255.0
+
+    def __call__(self, img):
+
+        img_np = img.permute(1, 2, 0).numpy()
+
+        mask = np.all(img_np < 0.01, axis=-1)
+
+        bg = cv2.resize(self.background,(img_np.shape[1], img_np.shape[0]))
+
+        img_np[mask] = bg[mask]
+
+        return torch.tensor(img_np,dtype=torch.float32).permute(2, 0, 1)
+
+# =========================================================
 # DATASET
-
 # =========================================================
 
-class Connect4Dataset(Dataset):
-def **init**(self, images, probs, players):
-"""
-images  : (N, H, W, 3)
-probs   : (N, 7)  → probabilités des coups
-players : (N,)    → joueur courant (0 ou 1)
-"""
-self.images = images
-self.probs = probs
-self.players = players
+class CustomDataset(Dataset):
 
-```
-def __len__(self):
-    return len(self.images)
+    def __init__(self, path, transforms):
 
-def __getitem__(self, idx):
-    # --- IMAGE ---
-    img = self.images[idx]
+        self.data = load_dataset(path)
 
-    # Redimensionnement → accélère énormément
-    img = cv2.resize(img, (224, 224))
+        self.horizontalflip = v2.RandomHorizontalFlip(1)
 
-    # Normalisation [0,1]
-    img = torch.tensor(img).float() / 255.0
+        self.transform = transforms
 
-    # Passage en format PyTorch (C, H, W)
-    img = img.permute(2, 0, 1)
+    def __len__(self):
 
-    # --- LABELS ---
-    probs = torch.tensor(self.probs[idx]).float()
-    player = torch.tensor(self.players[idx]).long()
+        return len(self.data)
 
-    return img, probs, player
-```
+    def __getitem__(self, idx):
+
+        bb1, bb2, turn, probs = self.data[idx]
+
+        # =================================================
+        # IMAGE
+        # =================================================
+
+        grid = bitboard_to_grid(bb1, bb2)
+
+        img = draw_board_cv2(grid, probs, turn)
+
+        img = torch.tensor(img,dtype=torch.float32)
+
+        img = img.permute(2, 0, 1)
+
+        # =================================================
+        # LABELS
+        # =================================================
+
+        label = torch.tensor(probs,dtype=torch.float32)
+
+        # =================================================
+        # TRANSFORMS
+        # =================================================
+
+        img = self.transform(img)
+
+        # =================================================
+        # FLIP
+        # =================================================
+
+        img, label = self.random_horizontal_flip(img,label)
+
+        # =================================================
+        # PLAYER
+        # =================================================
+
+        player = torch.tensor(turn-1,dtype=torch.long)
+
+        # =================================================
+        # RETURN
+        # =================================================
+
+        return img, label, player
+
+    # =====================================================
+    # HORIZONTAL FLIP
+    # =====================================================
+
+    def random_horizontal_flip(self,grid,probs,p=0.5):
+
+        if random.random() < p:
+
+            grid = self.horizontalflip(grid)
+
+
+            # inverse les colonnes des probabilités
+
+            probs = torch.flip(probs,dims=[0])
+
+        return grid, probs
 
 # =========================================================
-
 # MODELE CNN
-
 # =========================================================
 
 class Connect4CNN(nn.Module):
-def **init**(self):
-super().**init**()
 
-```
-    # --- PARTIE VISION ---
-    # 3 couches convolutionnelles
-    self.conv = nn.Sequential(
-        nn.Conv2d(3, 16, 5, padding=2),  # 3→16 filtres
-        nn.ReLU(),
-        nn.MaxPool2d(2),
+    def __init__(self):
 
-        nn.Conv2d(16, 32, 5, padding=2), # 16→32
-        nn.ReLU(),
-        nn.MaxPool2d(2),
+        super().__init__()
 
-        nn.Conv2d(32, 64, 5, padding=2), # 32→64
-        nn.ReLU(),
-        nn.MaxPool2d(2),
-    )
+        # =================================================
+        # CONVOLUTIONS
+        # =================================================
 
-    # Dropout = désactive aléatoirement des neurones
-    # → évite le sur-apprentissage (overfitting)
-    self.dropout = nn.Dropout(0.3)
+        self.conv = nn.Sequential(
 
-    # --- PARTIE DECISION ---
-    self.fc = nn.Sequential(
-        nn.Linear(64 * 28 * 28, 128),
-        nn.ReLU(),
-        nn.Dropout(0.3),
+            nn.Conv2d(3, 16, 5, padding=2),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
 
-        nn.Linear(128, 64),
-        nn.ReLU(),
-        nn.Dropout(0.3),
-    )
+            nn.Conv2d(16, 32, 5, padding=2),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
 
-    # --- SORTIES ---
-    self.policy_head = nn.Linear(64, 7)  # coups
-    self.player_head = nn.Linear(64, 2)  # joueur
+            nn.Conv2d(32, 64, 5, padding=2),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+        )
 
-def forward(self, x):
-    x = self.conv(x)
-    x = torch.flatten(x, 1)
-    x = self.fc(x)
+        # =================================================
+        # DROPOUT
+        # =================================================
 
-    return self.policy_head(x), self.player_head(x)
-```
+        self.dropout = nn.Dropout(0.3)
 
-# =========================================================
+        # =================================================
+        # FULLY CONNECTED
+        # =================================================
 
-# ENTRAINEMENT (1 EPOCH)
+        self.fc = nn.Sequential(
 
-# =========================================================
+            nn.Linear(64 * 28 * 28, 128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
 
-def train_one_epoch(model, loader, optimizer, kl_loss, ce_loss):
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+        )
 
-```
-model.train()
-total_loss = 0
+        # =================================================
+        # OUTPUTS
+        # =================================================
 
-for imgs, probs, players in loader:
+        self.policy_head = nn.Linear(64, 7)
 
-    imgs = imgs.to(device)
-    probs = probs.to(device)
-    players = players.to(device)
+        self.player_head = nn.Linear(64, 2)
 
-    # --- PREDICTION ---
-    policy_pred, player_pred = model(imgs)
+    def forward(self, x):
 
-    # --- LOSS ---
-    log_probs = F.log_softmax(policy_pred, dim=1)
-    loss_policy = kl_loss(log_probs, probs)
+        x = self.conv(x)
 
-    loss_player = ce_loss(player_pred, players)
+        x = torch.flatten(x, 1)
 
-    # Combinaison des deux objectifs
-    loss = loss_policy + 0.3 * loss_player
+        x = self.fc(x)
 
-    # --- BACKPROP ---
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-
-    total_loss += loss.item()
-
-return total_loss / len(loader)
-```
+        return (
+            self.policy_head(x),
+            self.player_head(x)
+        )
 
 # =========================================================
-
-# VALIDATION
-
+# TRAIN
 # =========================================================
 
-def evaluate(model, loader, kl_loss, ce_loss):
+def train_one_epoch(
+    model,
+    loader,
+    optimizer,
+    kl_loss,
+    ce_loss
+):
 
-```
-model.eval()
-total_loss = 0
+    model.train()
 
-with torch.no_grad():
+    total_loss = 0
+
     for imgs, probs, players in loader:
 
         imgs = imgs.to(device)
+
         probs = probs.to(device)
+
         players = players.to(device)
+
+        # =================================================
+        # PREDICTIONS
+        # =================================================
 
         policy_pred, player_pred = model(imgs)
 
-        log_probs = F.log_softmax(policy_pred, dim=1)
-        loss_policy = kl_loss(log_probs, probs)
+        # =================================================
+        # LOSSES
+        # =================================================
 
-        loss_player = ce_loss(player_pred, players)
+        log_probs = F.log_softmax(
+            policy_pred,
+            dim=1
+        )
+
+        loss_policy = kl_loss(
+            log_probs,
+            probs
+        )
+
+        loss_player = ce_loss(
+            player_pred,
+            players
+        )
 
         loss = loss_policy + 0.3 * loss_player
+
+        # =================================================
+        # BACKPROP
+        # =================================================
+
+        optimizer.zero_grad()
+
+        loss.backward()
+
+        optimizer.step()
+
         total_loss += loss.item()
 
-return total_loss / len(loader)
-```
+    return total_loss / len(loader)
 
 # =========================================================
+# VALIDATION
+# =========================================================
 
+def evaluate(
+    model,
+    loader,
+    kl_loss,
+    ce_loss
+):
+
+    model.eval()
+
+    total_loss = 0
+
+    with torch.no_grad():
+
+        for imgs, probs, players in loader:
+
+            imgs = imgs.to(device)
+
+            probs = probs.to(device)
+
+            players = players.to(device)
+
+            policy_pred, player_pred = model(imgs)
+
+            log_probs = F.log_softmax(
+                policy_pred,
+                dim=1
+            )
+
+            loss_policy = kl_loss(
+                log_probs,
+                probs
+            )
+
+            loss_player = ce_loss(
+                player_pred,
+                players
+            )
+
+            loss = loss_policy + 0.3 * loss_player
+
+            total_loss += loss.item()
+
+    return total_loss / len(loader)
+
+# =========================================================
 # MAIN
-
 # =========================================================
 
 def main():
 
-```
-# =========================
-# DONNEES (FAKE POUR TEST)
-# =========================
-# ⚠️ remplace par ton vrai dataset ensuite
-N = 10000
+    # =====================================================
+    # TRANSFORMS
+    # =====================================================
 
-images = np.random.randint(0, 255, (N, 600, 700, 3), dtype=np.uint8)
-probs = np.random.dirichlet(np.ones(7), size=N)
-players = np.random.randint(0, 2, size=N)
+    transforms = v2.Compose([
+        v2.RandomApply([v2.GaussianBlur(5, 0.1)],p=0.2),
+        v2.RandomAdjustSharpness(0.8,0.5),
+        v2.RandomZoomOut(0,(1.0, 3.0),p=1),
+        v2.RandomAffine(5,translate=(0.05, 0.05),fill=-1),
+        v2.RandomPerspective(distortion_scale=0.2,p=1.0),
+        #ReplaceBlackWithBackground("chemin vers img de fond en png"),
+        v2.RandomApply([v2.GaussianNoise(0, 0.1, True)],p=0.2),
 
-dataset = Connect4Dataset(images, probs, players)
-
-# =========================
-# SPLIT 80 / 20
-# =========================
-train_size = int(0.8 * len(dataset))
-val_size = len(dataset) - train_size
-
-train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-
-# =========================
-# MODEL + OPTIMIZER
-# =========================
-model = Connect4CNN().to(device)
-
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-
-kl_loss = nn.KLDivLoss(reduction="batchmean")
-ce_loss = nn.CrossEntropyLoss()
-
-# =========================
-# SUIVI DU MEILLEUR MODELE
-# =========================
-best_val_loss = float("inf")
-
-epochs = 10
-
-for epoch in range(epochs):
-
-    # --- TRAIN ---
-    train_loss = train_one_epoch(model, train_loader, optimizer, kl_loss, ce_loss)
-
-    # --- VALIDATION ---
-    val_loss = evaluate(model, val_loader, kl_loss, ce_loss)
-
-    print(f"\nEpoch {epoch+1}")
-    print(f"Train loss : {train_loss:.4f}")
-    print(f"Val loss   : {val_loss:.4f}")
+        v2.Resize((224, 224))
+    ])
 
     # =====================================================
-    # SAUVEGARDE DU DERNIER MODELE (TOUJOURS)
+    # DATASET
     # =====================================================
-    # Ce fichier est ECRASE à chaque epoch
-    # → contient le modèle le plus récent
-    torch.save({
-        "model_state": model.state_dict(),
-        "epoch": epoch,
-        "train_loss": train_loss,
-        "val_loss": val_loss
-    }, "last_model.pth")
+
+    dataset = CustomDataset("dataset.json",transforms)
+
+
+    img, probs, player = dataset[0]
+
+    print("MIN / MAX :", img.min(), img.max())
+    print("PLAYER :", player)
+    print("PROBS shape :", probs.shape)
 
     # =====================================================
-    # SAUVEGARDE DU MEILLEUR MODELE
+    # SPLIT
     # =====================================================
-    # On ne sauvegarde QUE si amélioration
-    if val_loss < best_val_loss:
-        best_val_loss = val_loss
+
+    train_size = int(0.8 * len(dataset))
+
+    val_size = len(dataset) - train_size
+
+    train_dataset, val_dataset = random_split(
+        dataset,
+        [train_size, val_size]
+    )
+
+    # =====================================================
+    # DATALOADERS
+    # =====================================================
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=32,
+        shuffle=True
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=32,
+        shuffle=False
+    )
+
+    # =====================================================
+    # MODEL
+    # =====================================================
+
+    model = Connect4CNN().to(device)
+
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=0.001
+    )
+
+    kl_loss = nn.KLDivLoss(
+        reduction="batchmean"
+    )
+
+    ce_loss = nn.CrossEntropyLoss()
+
+    # =====================================================
+    # TRAIN LOOP
+    # =====================================================
+
+    best_val_loss = float("inf")
+
+    epochs = 5
+
+    for epoch in range(epochs):
+
+        train_loss = train_one_epoch(
+            model,
+            train_loader,
+            optimizer,
+            kl_loss,
+            ce_loss
+        )
+
+        val_loss = evaluate(
+            model,
+            val_loader,
+            kl_loss,
+            ce_loss
+        )
+
+        print(f"\nEpoch {epoch+1}")
+
+        print(f"Train loss : {train_loss:.4f}")
+
+        print(f"Val loss   : {val_loss:.4f}")
+
+        # =================================================
+        # SAVE LAST MODEL
+        # =================================================
 
         torch.save({
+
             "model_state": model.state_dict(),
+
             "epoch": epoch,
+
             "train_loss": train_loss,
+
             "val_loss": val_loss
-        }, "best_model.pth")
 
-        print(">>> Nouveau meilleur modèle sauvegardé !")
+        }, "last_model.pth")
 
-    # =====================================================
-    # INTERPRETATION
-    # =====================================================
-    # Si :
-    # train_loss ↓ mais val_loss ↑
-    # → OVERFITTING
-```
+        # =================================================
+        # SAVE BEST MODEL
+        # =================================================
+
+        if val_loss < best_val_loss:
+
+            best_val_loss = val_loss
+
+            torch.save({
+
+                "model_state": model.state_dict(),
+
+                "epoch": epoch,
+
+                "train_loss": train_loss,
+
+                "val_loss": val_loss
+
+            }, "best_model.pth")
+
+            print(">>> Nouveau meilleur modèle sauvegardé !")
 
 # =========================================================
-
 # EXECUTION
-
 # =========================================================
 
-if **name** == "**main**":
-main()
+if __name__ == "__main__":
+
+    main()
