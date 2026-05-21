@@ -57,7 +57,6 @@ class  CustomDataset ( Dataset ):
 
         # -----------------
 
-
         img = self.transform(img)
 
 
@@ -79,39 +78,50 @@ class  CustomDataset ( Dataset ):
 
 if __name__ == "__main__":
 
-    idx = 50
+    idx = 0
     print("reading dataset")
-    transforms=v2.Compose([v2.RandomHorizontalFlip(1)
-        #v2.RandomRotation(10,v2.InterpolationMode.NEAREST,0) #0  quand il manque des pixels après rotation, mets du vide (fond noir)
-        #v2.ColorJitter(0.2, 0.2,1.2,0.5),
-        #v2.GaussianBlur(5,0.1),
-        #v2.GaussianNoise(0, 0.2, True),
-        #v2.RandomAdjustSharpness(0.8,0.5),
-        #v2.RandomZoomOut(0,(1.0, 4.0),p=0.8),#0=(fond noir)
-        #v2.RandomAffine(20, translate=(0.2, 0.2), fill=0)# Random shifts with white border
+    transforms=v2.Compose([
+        
+        #v2.ColorJitter(0.1, 0.1,0.1,0.015),
+        
+        v2.RandomApply([v2.GaussianBlur(5, 0.1)], p=0.2),# v2.GaussianBlur(5,0.1),
+        v2.RandomApply([v2.GaussianNoise(0, 0.1, True)], p=0.2),# v2.GaussianNoise(0, 0.2, True),
+        v2.RandomAdjustSharpness(0.8, 0.5),# v2.RandomAdjustSharpness(0.8,0.5),
+
+        v2.RandomZoomOut(0,(1.0, 3.0),p=1),#0=(fond noir)
+        v2.RandomAffine(5, translate=(0.05, 0.05), fill=0),#v2.RandomRotation(10,v2.InterpolationMode.NEAREST,0), #0  quand il manque des pixels après rotation, mets du vide (fond noir)
+        
+        v2.Resize((600, 700))
     ])
+
+
 
     my_dataset = CustomDataset("E:\\dataset.json",transforms)
 
-    # # ----------- AFFICHAGE IMAGE -----------
-    # grid, label = my_dataset[idx]
-    # img = grid.detach().cpu().numpy()
-    # print(img.shape)
-    # print(label.shape)
+    i = idx
 
-    img, label = my_dataset[idx]
+    while True:
+        img, label = my_dataset[i % len(my_dataset)]
 
-    # tensor -> numpy
-    #img = img.detach().cpu().numpy()
-    img = img.detach().cpu().permute(1, 2, 0).numpy().astype(np.uint8)
+
+    ######################img, label = my_dataset[idx]
+
+        img = img.detach().cpu().permute(1, 2, 0).numpy()
+        img = (img * 255).clip(0, 255).astype(np.uint8)
 
     
-    print("img shape:", img.shape)
+    ######################print("img shape:", img.shape)
 
     # sécurisation
-    img = np.clip(img, 0, 255).astype(np.uint8)
+        img = np.clip(img, 0, 255).astype(np.uint8)
 
     # affichage uniquement de l'image
-    cv2.imshow("image", img)
-    cv2.waitKey(0)
+        cv2.imshow("image", img)
+        if cv2.waitKey(100) & 0xFF == ord('q'):
+            break
+
+        i += 1
+
+
+    #############cv2.waitKey(0)
     cv2.destroyAllWindows()
