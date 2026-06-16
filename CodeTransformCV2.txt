@@ -1,4 +1,4 @@
-#####VERSION AVEC DERNIERE IMAGE DE FOND
+#####VERSION AVEC DERNIERE IMAGE DE FOND avec bonne couleur
 import torch
 import random
 import torchvision.transforms.v2 as v2
@@ -37,7 +37,7 @@ class BackgroundDataset:
         if img is None:
             return self.get_random()
 
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = img.astype(np.float32) / 255.0
 
         return img
