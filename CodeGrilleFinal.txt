@@ -1,0 +1,202 @@
+import cv2
+import numpy as np
+import sys
+import json
+
+# Dimensions du plateau de Puissance 4
+COLS = 7  # nombre de colonnes
+ROWS = 6  # nombre de lignes
+CELL_SIZE = 100  # taille d'une case en pixels
+
+
+# Taille totale de la fenêtre d'affichage
+WIDTH = COLS * CELL_SIZE
+HEIGHT = ROWS * CELL_SIZE
+
+# Couleurs (format BGR utilisé par OpenCV)
+BLUE = (255, 0, 0)       # bleu du plateau
+BLACK = (0, 0, 0)        # case vide
+RED = (0, 0, 255)        # joueur 1
+YELLOW = (0, 255, 255)   # joueur 2
+WHITE = (255, 255, 255)  # texte
+
+
+def bitboard_to_grid(bb1, bb2):
+
+    Convertit deux bitboards en grille 2D exploitable pour l'affichage.
+
+    bb1 : positions du joueur 1
+    bb2 : positions du joueur 2
+
+    Retourne une matrice ROWS x COLS contenant :
+    0 = case vide
+    1 = pion joueur 1
+    2 = pion joueur 2
+
+    grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+
+    # Parcours de chaque position du bitboard
+    for col in range(COLS):
+        for row in range(ROWS):
+
+            # Calcul de l'indice du bit correspondant
+            bit_index = col * 7 + row
+            mask = 1 << bit_index
+
+            # Inversion de l'axe vertical pour l'affichage
+            display_row = ROWS - 1 - row
+
+            # Vérification de la présence d'un pion
+            if bb1 & mask:
+                grid[display_row][col] = 1
+            elif bb2 & mask:
+                grid[display_row][col] = 2
+
+    return grid
+
+
+def draw_board_cv2(grid, probs, turn):
+
+    #Dessine le plateau dans une image OpenCV.
+
+    #grid : état du plateau
+    #probs : probabilités associées aux colonnes (non utilisées actuellement)
+    #turn : joueur dont c'est le tour (non affiché actuellement)
+
+    # Création d'une image noire
+    img = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+    # Dessin du plateau
+    for col in range(COLS):
+        for row in range(ROWS):
+
+            # Coin supérieur gauche de la case
+            x = col * CELL_SIZE
+            y = row * CELL_SIZE
+
+            # Fond bleu du plateau
+            cv2.rectangle(img, (x, y), (x + CELL_SIZE, y + CELL_SIZE), BLUE, -1)
+
+            # Centre du jeton
+            center = (x + CELL_SIZE // 2, y + CELL_SIZE // 2)
+
+            # Choix de la couleur selon le contenu de la case
+            if grid[row][col] == 0:
+                color = BLACK
+            elif grid[row][col] == 1:
+                color = RED
+            else:
+                color = YELLOW
+
+            # Dessin du pion
+            cv2.circle(img, center, CELL_SIZE // 2 - 10, color, -1)
+
+
+    # Affichage intermédiaire
+    cv2.imshow("test", img)
+
+    return img
+
+
+def load_dataset(path):
+
+    Charge un dataset JSON contenant :
+
+    {
+        "(bb1, bb2)": [probs, turn]
+    }
+
+    Retourne une liste de tuples :
+    (bb1, bb2, turn, probs)
+
+    try:
+        with open(path, "r") as f:
+            raw_data = json.load(f)
+
+        dataset = []
+
+        # Conversion du dictionnaire JSON en liste exploitable
+        for key, value in raw_data.items():
+
+            # Suppression des parenthèses
+            key = key.strip("()")
+
+            # Séparation des deux bitboards
+            bb1_str, bb2_str = key.split(",")
+
+            bb1 = int(bb1_str.strip())
+            bb2 = int(bb2_str.strip())
+
+            # Récupération des données associées
+            probs = value[0]
+            turn = value[1]
+
+            dataset.append((bb1, bb2, turn, probs))
+
+        return dataset
+
+    except Exception as e:
+        print(f"Erreur chargement dataset : {e}")
+        sys.exit()
+
+
+def main():
+
+    #Boucle principale :
+    #- charge le dataset
+    #- affiche chaque position successivement
+    #- permet de quitter avec ESC
+
+
+    # Chargement du dataset
+    dataset = load_dataset("E:\\dataset.json")
+
+    # Position initiale
+    index = 0
+    bb1, bb2, turn, probs = dataset[index]
+
+    # Conversion bitboard -> grille
+    grid = bitboard_to_grid(bb1, bb2)
+
+    # Temps entre deux positions affichées (en ms)
+    delay = 5  # 5 ms
+
+    # Horodatage de référence
+    last_update = cv2.getTickCount()
+
+    while True:
+
+        # Temps actuel
+        now = cv2.getTickCount()
+
+        # Temps écoulé depuis la dernière mise à jour
+        elapsed = (now - last_update) / cv2.getTickFrequency() * 1000
+
+        # Passage à la position suivante
+        if elapsed >= delay:
+            index = (index + 1) % len(dataset)
+
+            bb1, bb2, turn, probs = dataset[index]
+
+            # Reconstruction de la grille
+            grid = bitboard_to_grid(bb1, bb2)
+
+            last_update = now
+
+        # Génération de l'image
+        img = draw_board_cv2(grid, probs, turn)
+
+        # Affichage principal
+        cv2.imshow("Puissance 4 - Dataset Viewer", img)
+
+        # Touche ESC pour quitter
+        if cv2.waitKey(1) & 0xFF == 27:
+            break
+
+    # Fermeture des fenêtres OpenCV
+    cv2.destroyAllWindows()
+
+
+# Point d'entrée du programme
+if __name__ == "__main__":
+    main()

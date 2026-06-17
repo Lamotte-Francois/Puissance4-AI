@@ -1,0 +1,157 @@
+import cv2
+import numpy as np
+import sys
+import json
+
+# Dimensions
+COLS = 7
+ROWS = 6
+CELL_SIZE = 100
+#EXTRA_HEIGHT = 80  # espace pour les probas
+WIDTH = COLS * CELL_SIZE
+HEIGHT = ROWS * CELL_SIZE #+ EXTRA_HEIGHT
+
+# Couleurs (BGR pour OpenCV)
+BLUE = (255, 0, 0)
+BLACK = (0, 0, 0)
+RED = (0, 0, 255)
+YELLOW = (0, 255, 255)
+WHITE = (255, 255, 255)
+
+
+def bitboard_to_grid(bb1, bb2):
+    grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+
+    for col in range(COLS):
+        for row in range(ROWS):
+            bit_index = col * 7 + row
+            mask = 1 << bit_index
+            display_row = ROWS - 1 - row
+
+            if bb1 & mask:
+                grid[display_row][col] = 1
+            elif bb2 & mask:
+                grid[display_row][col] = 2
+
+    return grid
+
+
+def draw_board_cv2(grid, probs, turn):
+    img = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+    # Plateau
+    for col in range(COLS):
+        for row in range(ROWS):
+            x = col * CELL_SIZE
+            y = row * CELL_SIZE
+
+            cv2.rectangle(img, (x, y), (x + CELL_SIZE, y + CELL_SIZE), BLUE, -1)
+
+            center = (x + CELL_SIZE // 2, y + CELL_SIZE // 2)
+
+            if grid[row][col] == 0:
+                color = BLACK
+            elif grid[row][col] == 1:
+                color = RED
+            else:
+                color = YELLOW
+
+            cv2.circle(img, center, CELL_SIZE // 2 - 10, color, -1)
+
+    # # 🔥 Barres de probabilité
+    # for col in range(COLS):
+    #     p = probs[col]
+
+    #     bar_height = int(p * 60)  # max 60px
+    #     x = col * CELL_SIZE + CELL_SIZE // 4
+    #     y = HEIGHT - bar_height
+
+    #     cv2.rectangle(
+    #         img,
+    #         (x, y),
+    #         (x + CELL_SIZE // 2, HEIGHT + 60),
+    #         (0, 255, 0),
+    #         -1
+    #     )
+
+    # # 🔢 Texte probas
+    # for col in range(COLS):
+    #     text = f"{probs[col]:.2f}"
+    #     x = col * CELL_SIZE + 28
+    #     y = HEIGHT - 60
+
+    #     cv2.putText(img, text, (x, y),
+    #                 cv2.FONT_HERSHEY_SIMPLEX,
+    #                 0.5, WHITE, 1)
+
+    # # 🔄 Tour
+    # cv2.putText(img, f"Turn: {turn}", (10, HEIGHT + 25),
+    #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, WHITE, 2)
+    #########print(img.shape)
+
+    # #Affichage du label avant miroir
+    # print("No")
+    # print(probs)
+
+    cv2.imshow("test",img)
+    return img
+
+
+def load_dataset(path):
+    try:
+        with open(path, "r") as f:
+            raw_data = json.load(f)
+
+        dataset = []
+
+        for key, value in raw_data.items():
+            key = key.strip("()")
+            bb1_str, bb2_str = key.split(",")
+
+            bb1 = int(bb1_str.strip())
+            bb2 = int(bb2_str.strip())
+
+            probs = value[0]
+            turn = value[1]
+
+            dataset.append((bb1, bb2, turn, probs))
+
+        return dataset
+
+    except Exception as e:
+        print(f"Erreur chargement dataset : {e}")
+        sys.exit()
+
+
+def main():
+    dataset = load_dataset("E:\\dataset.json")
+
+    index = 0
+    bb1, bb2, turn, probs = dataset[index]
+    grid = bitboard_to_grid(bb1, bb2)
+
+    delay = 500  # ms
+    last_update = cv2.getTickCount()
+
+    while True:
+        now = cv2.getTickCount()
+        elapsed = (now - last_update) / cv2.getTickFrequency() * 1000
+
+        if elapsed >= delay:
+            index = (index + 1) % len(dataset)
+            bb1, bb2, turn, probs = dataset[index]
+            grid = bitboard_to_grid(bb1, bb2)
+            last_update = now
+
+        img = draw_board_cv2(grid, probs, turn)
+
+        cv2.imshow("Puissance 4 - Dataset Viewer", img)
+        # ESC pour quitter
+        if cv2.waitKey(1) & 0xFF == 27:
+            break
+
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
