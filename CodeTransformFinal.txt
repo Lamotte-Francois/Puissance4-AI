@@ -1,0 +1,203 @@
+import torch
+import random
+import torchvision.transforms.v2 as v2
+from torch.utils.data import Dataset
+from grille import load_dataset, bitboard_to_grid, draw_board_cv2
+import cv2
+import numpy as np
+import os
+
+
+# ----------------------------
+# Chargement des images de fond
+# utilisées pour remplacer les pixels noirs
+# ----------------------------
+class BackgroundDataset:
+    def __init__(self, root_path):
+        self.images = []
+
+        # Parcours récursif du dataset d'images
+        for root, _, files in os.walk(root_path):
+            for f in files:
+                if f.lower().endswith((".jpg", ".jpeg", ".png")):
+
+                    # Conservation uniquement des catégories souhaitées
+                    path_lower = root.lower()
+
+                    if ("kitchen" in path_lower) or ("dining_room" in path_lower) or ("computerroom" in path_lower) or ("livingroom" in path_lower) or ("classroom" in path_lower):
+                        self.images.append(os.path.join(root, f))
+
+        print("Background images loaded:", len(self.images))
+
+        # Vérification qu'au moins une image a été trouvée
+        if len(self.images) == 0:
+            raise ValueError("Aucune image kitchen/dining_room trouvée -> vérifie le chemin du dataset")
+
+    def get_random(self):
+        # Sélection aléatoire d'une image
+        path = random.choice(self.images)
+
+        img = cv2.imread(path)
+
+        # Si l'image est corrompue ou illisible,
+        # on en choisit une autre
+        if img is None:
+            return self.get_random()
+
+        # Conversion en float dans l'intervalle [0,1]
+        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = img.astype(np.float32) / 255.0
+
+        return img
+
+
+# ----------------------------
+# Transformation personnalisée
+# Remplace les zones noires par un fond aléatoire
+# ----------------------------
+class ReplaceBlackWithBackground:
+    def __init__(self, background_dataset):
+        self.bg_dataset = background_dataset
+
+    def __call__(self, img):
+
+        # Passage du format CHW vers HWC pour NumPy
+        img_np = img.permute(1, 2, 0).numpy()
+
+        # Détection des pixels quasiment noirs
+        mask = np.all(img_np < 0.01, axis=-1)
+
+        # Chargement d'un fond aléatoire
+        bg = self.bg_dataset.get_random()
+
+        # Adaptation du fond à la taille de l'image
+        bg = cv2.resize(bg, (img_np.shape[1], img_np.shape[0]))
+
+        # Remplacement des pixels noirs par le fond
+        img_np[mask] = bg[mask]
+
+        # Retour au format Tensor CHW
+        return torch.tensor(img_np, dtype=torch.float32).permute(2, 0, 1)
+
+
+# ----------------------------
+# Dataset principal
+# Génère les images de Puissance 4
+# et applique les augmentations
+# ----------------------------
+class CustomDataset(Dataset):
+    def __init__(self, path, transforms):
+
+        # Chargement du dataset JSON
+        self.data = load_dataset(path)
+
+        # Flip horizontal forcé (p=1)
+        self.horizontalflip = v2.RandomHorizontalFlip(1)
+
+        # Pipeline de transformations
+        self.transform = transforms
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+
+        # Récupération d'un échantillon
+        bb1, bb2, turn, probs = self.data[idx]
+
+        # Reconstruction de la grille
+        grid = bitboard_to_grid(bb1, bb2)
+
+        # Génération de l'image du plateau
+        img = draw_board_cv2(grid, probs, turn)
+
+        # Conversion OpenCV -> Tensor PyTorch
+        img = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1)
+
+        # Les probabilités servent de label
+        label = torch.tensor(probs, dtype=torch.float32)
+
+        # Application des augmentations
+        img = self.transform(img)
+
+        # Flip horizontal aléatoire synchronisé
+        # entre l'image et les probabilités
+        img, label = self.random_horizontal_flip(img, label)
+
+        return img, label
+
+    def random_horizontal_flip(self, grid, probs, p=0.5):
+
+        # Une fois sur deux, miroir horizontal
+        if random.random() < p:
+            grid = self.horizontalflip(grid)
+
+            # Les probabilités sont également inversées
+            # afin de rester cohérentes avec l'image
+            probs = self.horizontalflip(probs)
+
+        return grid, probs
+
+
+# ----------------------------
+# Programme de test
+# Permet de visualiser les augmentations
+# ----------------------------
+if __name__ == "__main__":
+
+    # Dataset d'images de fond
+    bg_dataset = BackgroundDataset("D:\ImageDataSet\indoorCVPR_09")
+
+    # Pipeline d'augmentation
+    transforms = v2.Compose([
+
+        # Flou gaussien aléatoire
+        v2.RandomApply([v2.GaussianBlur(5, 0.1)], p=0.2),
+
+        # Modification de la netteté
+        v2.RandomAdjustSharpness(0.8, 0.5),
+
+        # Zoom arrière avec ajout de bordures
+        v2.RandomZoomOut(0, (1.0, 3.0), p=1),
+
+        # Rotation légère + translation
+        # Les zones vides sont remplies avec -1
+        v2.RandomAffine(5, translate=(0.05, 0.05), fill=-1),
+
+        # Remplacement des pixels noirs par un fond réel
+        ReplaceBlackWithBackground(bg_dataset),
+
+        # Bruit gaussien aléatoire
+        v2.RandomApply([v2.GaussianNoise(0, 0.1, True)], p=0.2),
+
+        # Taille finale utilisée par le modèle
+        v2.Resize((600, 700))
+    ])
+
+    # Création du dataset
+    my_dataset = CustomDataset("E:\\dataset.json", transforms)
+
+    idx = 0
+
+    while True:
+
+        # Génération d'un échantillon
+        img, label = my_dataset[idx]
+
+        # Conversion Tensor -> image OpenCV
+        img = img.detach().cpu().permute(1, 2, 0).numpy()
+
+        # Retour dans l'intervalle [0,255]
+        img = (img * 255).clip(0, 255).astype(np.uint8)
+
+        # Affichage du résultat
+        cv2.imshow("image", img)
+
+        # Quitter avec la touche q
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+        idx += 1
+
+    # Fermeture des fenêtres OpenCV
+    cv2.destroyAllWindows()
